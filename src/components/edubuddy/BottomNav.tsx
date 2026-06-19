@@ -1,10 +1,11 @@
-import { Bot, MessagesSquare, User } from "lucide-react";
+import { Bot, MessagesSquare, User, BookOpen } from "lucide-react";
 
-export type Tab = "tutor" | "community" | "profile";
+export type Tab = "tutor" | "community" | "library" | "profile";
 
 const TABS: { id: Tab; label: string; Icon: typeof Bot }[] = [
   { id: "tutor", label: "My Tutor", Icon: Bot },
   { id: "community", label: "Community", Icon: MessagesSquare },
+  { id: "library", label: "Library", Icon: BookOpen },
   { id: "profile", label: "Profile", Icon: User },
 ];
 

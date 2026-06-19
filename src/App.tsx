@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Onboarding, type Level } from "@/components/edubuddy/Onboarding";
 import { MyTutor } from "@/components/edubuddy/MyTutor";
 import { Community } from "@/components/edubuddy/Community";
+import { Library } from "@/components/edubuddy/Library";
 import { Profile } from "@/components/edubuddy/Profile";
 import { BottomNav, type Tab } from "@/components/edubuddy/BottomNav";
 
@@ -21,6 +22,7 @@ export default function App() {
               <MyTutor name={name} level={level} onEditLevel={() => setTab("profile")} />
             )}
             {tab === "community" && <Community />}
+            {tab === "library" && <Library />}
             {tab === "profile" && (
               <Profile name={name} level={level} onLevelChange={setLevel} />
             )}
