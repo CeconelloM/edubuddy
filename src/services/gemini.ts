@@ -43,7 +43,9 @@ Your strict rules:
 Example: "That's a really sharp observation — it goes without saying that getting the hang of idioms takes time. What do you reckon is the most effective way to pick them up naturally?"`,
 };
 
-export function createTutorChat(level: Level) {
+type GeminiHistory = { role: "user" | "model"; parts: { text: string }[] }[];
+
+export function createTutorChat(level: Level, history: GeminiHistory = []) {
   const apiKey = (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim();
   if (!apiKey) {
     throw new Error("VITE_GEMINI_API_KEY is not defined. Add it to your .env.local file.");
@@ -56,6 +58,7 @@ export function createTutorChat(level: Level) {
   });
 
   return model.startChat({
+    history,
     generationConfig: {
       maxOutputTokens: 512,
       temperature: 0.85,

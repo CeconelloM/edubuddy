@@ -1,15 +1,51 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Camera, Send, ChevronRight, AlertCircle } from "lucide-react";
+import { Camera, Send, ChevronRight, AlertCircle, Flame } from "lucide-react";
 import type { ChatSession } from "@google/generative-ai";
 import mascot from "@/assets/edubuddy-mascot.png";
 import type { Level } from "./Onboarding";
 import { createTutorChat } from "@/services/gemini";
 
-type Message = {
-  id: number;
-  role: "user" | "ai";
-  text: string;
-};
+type Message = { id: number; role: "user" | "ai"; text: string };
+
+// sessionStorage key — cleared automatically by the browser on tab close / F5 / window close
+const SESSION_KEY = "edubuddy_chat_session";
+
+type StoredSession = { level: Level; messages: Message[] };
+
+function loadSession(level: Level): Message[] {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return [];
+    const parsed: StoredSession = JSON.parse(raw);
+    // Only restore if the saved session matches the current level
+    return parsed.level === level ? parsed.messages : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSession(level: Level, messages: Message[]) {
+  try {
+    // Only save complete messages (no empty streaming placeholders)
+    const complete = messages.filter((m) => m.text.length > 0);
+    if (complete.length > 0) {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ level, messages: complete }));
+    }
+  } catch {}
+}
+
+// Convert stored messages into the format Gemini's startChat history expects.
+// The initial AI welcome message (id === 0) is skipped — the system prompt covers it.
+function buildGeminiHistory(
+  messages: Message[],
+): { role: "user" | "model"; parts: { text: string }[] }[] {
+  return messages
+    .filter((m) => m.id !== 0 && m.text.length > 0)
+    .map((m) => ({
+      role: m.role === "user" ? ("user" as const) : ("model" as const),
+      parts: [{ text: m.text }],
+    }));
+}
 
 const WELCOME: Record<Level, string> = {
   Beginner:
@@ -41,33 +77,56 @@ export function MyTutor({
   name,
   level,
   onEditLevel,
+  onMessageSent,
 }: {
   name: string;
   level: Level;
   onEditLevel: () => void;
+  onMessageSent: () => Promise<boolean>;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [goalBanner, setGoalBanner] = useState(false);
   const chatRef = useRef<ChatSession | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // On mount (or level change): restore session from sessionStorage and init Gemini with history
   useEffect(() => {
+    const saved = loadSession(level);
+    const startMessages =
+      saved.length > 0 ? saved : [{ id: 0, role: "ai" as const, text: WELCOME[level] }];
+
     try {
-      chatRef.current = createTutorChat(level);
+      chatRef.current = createTutorChat(level, buildGeminiHistory(saved));
       setApiError(null);
     } catch (err) {
       setApiError(err instanceof Error ? err.message : "Failed to initialize tutor.");
       chatRef.current = null;
     }
-    setMessages([{ id: 0, role: "ai", text: WELCOME[level] }]);
+
+    setMessages(startMessages);
   }, [level]);
+
+  // Persist messages to sessionStorage whenever they change
+  useEffect(() => {
+    if (messages.length > 0) {
+      saveSession(level, messages);
+    }
+  }, [messages, level]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+    };
+  }, []);
 
   const send = useCallback(async () => {
     const text = draft.trim();
@@ -91,8 +150,19 @@ export function MyTutor({
           prev.map((m) => (m.id === aiId ? { ...m, text: m.text + chunkText } : m)),
         );
       }
-      // Await the full response to surface any finish-reason errors (e.g. safety blocks).
       await result.response;
+
+      // Count this exchange and check if the daily goal was just reached
+      try {
+        const goalReached = await onMessageSent();
+        if (goalReached) {
+          setGoalBanner(true);
+          if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
+          bannerTimerRef.current = setTimeout(() => setGoalBanner(false), 5000);
+        }
+      } catch {
+        console.warn("[EduBuddy] Failed to update message count");
+      }
     } catch (err) {
       console.error("[EduBuddy] Gemini error:", err);
       const raw = err instanceof Error ? err.message : String(err);
@@ -109,7 +179,7 @@ export function MyTutor({
     } finally {
       setIsStreaming(false);
     }
-  }, [draft, isStreaming]);
+  }, [draft, isStreaming, onMessageSent]);
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -136,12 +206,22 @@ export function MyTutor({
             </button>
           </div>
           <div className="grid size-11 shrink-0 place-items-center rounded-full bg-brand-orange-soft text-sm font-bold text-brand-orange ring-1 ring-brand-orange/20">
-            {name.charAt(0)}
+            {name.charAt(0).toUpperCase()}
           </div>
         </div>
       </header>
 
-      {/* API key error banner */}
+      {/* Daily goal banner — appears for 5s when the daily goal threshold is crossed */}
+      {goalBanner && (
+        <div className="mx-4 mb-2 flex items-center justify-center gap-2 rounded-2xl bg-brand-orange-soft px-4 py-3 ring-1 ring-brand-orange/20">
+          <Flame className="size-4 text-brand-orange" />
+          <span className="text-sm font-semibold text-brand-orange">
+            Daily Goal Reached! Keep up the streak 🔥
+          </span>
+        </div>
+      )}
+
+      {/* API error banner */}
       {apiError && (
         <div className="mx-4 mb-2 flex items-start gap-2 rounded-xl bg-destructive/10 px-4 py-3 text-xs text-destructive ring-1 ring-destructive/20">
           <AlertCircle className="mt-0.5 size-4 shrink-0" />
@@ -162,11 +242,7 @@ export function MyTutor({
             ) : (
               <div key={msg.id} className="flex items-end gap-2">
                 <div className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-blue-soft ring-1 ring-brand-blue/20">
-                  <img
-                    src={mascot}
-                    alt="EduBuddy"
-                    className="size-6 object-contain"
-                  />
+                  <img src={mascot} alt="EduBuddy" className="size-6 object-contain" />
                 </div>
                 <div className="max-w-[82%] rounded-2xl rounded-bl-sm bg-surface px-4 py-3 text-sm leading-relaxed text-foreground ring-1 ring-border shadow-sm">
                   {msg.text === "" ? <TypingDots /> : msg.text}
