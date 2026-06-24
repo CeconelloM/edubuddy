@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   ArrowLeft, Send, Users, Plus, Clock, Loader2,
-  Sparkles, Film, Plane, Coffee, BookOpen, Music, Gamepad2, Globe,
+  Sparkles, Film, Plane, Coffee, BookOpen, Music, Gamepad2, Globe, X,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { supabase } from "@/services/supabase";
@@ -15,6 +15,7 @@ type Topic = {
   icon_type: string;
   created_by: string;
   author_nickname: string;
+  author_role?: string;
   created_at: string;
 };
 
@@ -23,8 +24,18 @@ type TopicMessage = {
   topic_id: string;
   user_id: string;
   author_nickname: string;
+  author_role?: string;
   content: string;
   created_at: string;
+};
+
+type ProfileData = {
+  id: string;
+  nickname: string | null;
+  full_name: string | null;
+  email: string | null;
+  created_at: string;
+  role: string;
 };
 
 // ─── Icon config ─────────────────────────────────────────────────────────────
@@ -64,10 +75,12 @@ function avatarColor(str: string): string {
 export function Community({
   nickname,
   onMessageSent,
+  userRole = "user",
 }: {
   userId: string;
   nickname: string;
   onMessageSent: () => Promise<boolean>;
+  userRole?: string;
 }) {
   // List state
   const [topics, setTopics] = useState<Topic[]>([]);
@@ -87,6 +100,23 @@ export function Community({
   const [form, setForm] = useState({ title: "", description: "", icon_type: "sparkles" });
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Profile viewer (admin / teacher only)
+  const isStaff = userRole === "admin" || userRole === "teacher";
+  const [viewingProfile, setViewingProfile] = useState<ProfileData | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+
+  async function handleViewProfile(userId: string) {
+    if (!isStaff || profileLoading) return;
+    setProfileLoading(true);
+    const { data } = await supabase
+      .from("profiles")
+      .select("id, nickname, full_name, email, created_at, role")
+      .eq("id", userId)
+      .single();
+    setProfileLoading(false);
+    if (data) setViewingProfile(data as ProfileData);
+  }
 
   useEffect(() => {
     fetchTopics();
@@ -143,6 +173,7 @@ export function Community({
     setOpenTopic(null);
     setTopicMessages([]);
     setChatDraft("");
+    setViewingProfile(null);
   }
 
   function openModal() {
@@ -176,6 +207,7 @@ export function Community({
       icon_type: form.icon_type,
       created_by: authUser.id,
       author_nickname: nickname,
+      author_role: userRole,
     });
 
     setSubmitting(false);
@@ -212,6 +244,7 @@ export function Community({
         topic_id: openTopic.id,
         user_id: authUser.id,
         author_nickname: nickname,
+        author_role: userRole,
         content,
       })
       .select()
@@ -235,6 +268,7 @@ export function Community({
   if (openTopic) {
     const { Icon, tint } = getIcon(openTopic.icon_type);
     return (
+      <>
       <div className="flex min-h-dvh flex-col bg-background">
         <header className="flex items-center gap-3 border-b border-border bg-surface px-4 pt-10 pb-3">
           <button
@@ -249,7 +283,16 @@ export function Community({
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-base font-semibold text-foreground">{openTopic.title}</h2>
             <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Users className="size-3" /> by {openTopic.author_nickname} · community thread
+              <Users className="size-3" />
+              {" by "}
+              <span
+                className={isStaff ? "cursor-pointer hover:text-brand-green hover:underline" : ""}
+                onClick={isStaff ? () => handleViewProfile(openTopic.created_by) : undefined}
+              >
+                {openTopic.author_nickname}
+              </span>
+              <RoleBadge role={openTopic.author_role} />
+              · community thread
             </p>
           </div>
         </header>
@@ -291,13 +334,20 @@ export function Community({
                 return (
                   <div key={msg.id} className="flex gap-3">
                     <div
-                      className={`grid size-9 shrink-0 place-items-center rounded-full ${avatarColor(msg.author_nickname)} text-xs font-bold text-white`}
+                      className={`grid size-9 shrink-0 place-items-center rounded-full ${avatarColor(msg.author_nickname)} text-xs font-bold text-white transition-all ${isStaff ? "cursor-pointer ring-2 ring-transparent hover:ring-brand-green/40" : ""}`}
+                      onClick={() => isStaff && handleViewProfile(msg.user_id)}
                     >
                       {msg.author_nickname.charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-[11px] font-bold text-muted-foreground">
-                        {msg.author_nickname}
+                      <p className="flex items-center gap-1.5 text-[11px] font-bold text-muted-foreground">
+                        <span
+                          className={isStaff ? "cursor-pointer hover:text-brand-green" : ""}
+                          onClick={() => isStaff && handleViewProfile(msg.user_id)}
+                        >
+                          {msg.author_nickname}
+                        </span>
+                        <RoleBadge role={msg.author_role} />
                       </p>
                       <div className="mt-1 inline-block rounded-2xl rounded-tl-sm bg-surface px-3 py-2 text-sm leading-relaxed text-foreground ring-1 ring-border">
                         {msg.content}
@@ -340,6 +390,16 @@ export function Community({
           </div>
         </form>
       </div>
+
+      {viewingProfile && (
+        <ProfileModal profile={viewingProfile} onClose={() => setViewingProfile(null)} />
+      )}
+      {profileLoading && !viewingProfile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <Loader2 className="size-8 animate-spin text-white" />
+        </div>
+      )}
+      </>
     );
   }
 
@@ -426,9 +486,16 @@ export function Community({
                       {topic.description ? (
                         <p className="line-clamp-1 block w-full text-xs text-muted-foreground">{topic.description}</p>
                       ) : null}
-                      <p className="mt-0.5 truncate text-[11px] text-muted-foreground/60">
-                        by {topic.author_nickname} ·{" "}
-                        {formatDistanceToNow(new Date(topic.created_at), { addSuffix: true })}
+                      <p className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-muted-foreground/60">
+                        {"by "}
+                        <span
+                          className={isStaff ? "cursor-pointer hover:text-brand-green hover:underline" : ""}
+                          onClick={isStaff ? (e) => { e.stopPropagation(); handleViewProfile(topic.created_by); } : undefined}
+                        >
+                          {topic.author_nickname}
+                        </span>
+                        <RoleBadge role={topic.author_role} />
+                        · {formatDistanceToNow(new Date(topic.created_at), { addSuffix: true })}
                       </p>
                     </div>
                   </button>
@@ -438,6 +505,16 @@ export function Community({
           )}
         </div>
       </div>
+
+      {/* ── Profile Modal ──────────────────────────────────────────────────── */}
+      {viewingProfile && (
+        <ProfileModal profile={viewingProfile} onClose={() => setViewingProfile(null)} />
+      )}
+      {profileLoading && !viewingProfile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <Loader2 className="size-8 animate-spin text-white" />
+        </div>
+      )}
 
       {/* ── Create Topic Modal ──────────────────────────────────────────────── */}
       {showModal && (
@@ -548,4 +625,109 @@ export function Community({
       )}
     </>
   );
+}
+
+// ── ProfileModal ──────────────────────────────────────────────────────────────
+
+function ProfileModal({ profile, onClose }: { profile: ProfileData; onClose: () => void }) {
+  const initials = (profile.nickname ?? profile.email ?? "?").slice(0, 2).toUpperCase();
+  const joined = new Date(profile.created_at).toLocaleDateString("pt-BR", {
+    month: "long",
+    year: "numeric",
+  });
+  const joinedFormatted = joined.charAt(0).toUpperCase() + joined.slice(1);
+
+  const avatarBg =
+    profile.role === "admin"
+      ? "bg-amber-500"
+      : profile.role === "teacher"
+      ? "bg-blue-500"
+      : avatarColor(profile.nickname ?? "user");
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md overflow-hidden rounded-t-3xl bg-surface shadow-2xl ring-1 ring-border"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Drag handle */}
+        <div className="flex justify-center pt-3 pb-1">
+          <div className="h-1 w-10 rounded-full bg-muted-foreground/20" />
+        </div>
+
+        {/* Avatar + name */}
+        <div className="relative flex flex-col items-center px-6 pt-4 pb-6">
+          <button
+            onClick={onClose}
+            className="absolute right-4 top-0 grid size-8 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="size-4" />
+          </button>
+
+          <div className={`grid size-20 place-items-center rounded-2xl text-2xl font-bold text-white ${avatarBg}`}>
+            {initials}
+          </div>
+
+          <div className="mt-3 flex items-center gap-2">
+            <p className="text-lg font-bold text-foreground">
+              {profile.full_name ?? profile.nickname ?? "—"}
+            </p>
+            <RoleBadge role={profile.role} />
+          </div>
+
+          {profile.nickname && (
+            <p className="text-sm text-muted-foreground">@{profile.nickname}</p>
+          )}
+        </div>
+
+        {/* Detail rows */}
+        <div className="mx-4 mb-4 overflow-hidden rounded-2xl border border-border bg-background">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <span className="text-xs text-muted-foreground">E-mail</span>
+            <span className="max-w-[60%] truncate text-xs font-medium text-foreground">
+              {profile.email ?? "—"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between px-4 py-3">
+            <span className="text-xs text-muted-foreground">Membro desde</span>
+            <span className="text-xs font-medium text-foreground">{joinedFormatted}</span>
+          </div>
+        </div>
+
+        {/* Close CTA */}
+        <div className="px-4 pb-8">
+          <button
+            onClick={onClose}
+            className="w-full rounded-2xl bg-muted py-3.5 text-sm font-semibold text-foreground"
+          >
+            Fechar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── RoleBadge ─────────────────────────────────────────────────────────────────
+
+function RoleBadge({ role }: { role?: string }) {
+  if (!role || role === "user") return null;
+  if (role === "admin") {
+    return (
+      <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
+        Admin
+      </span>
+    );
+  }
+  if (role === "teacher") {
+    return (
+      <span className="inline-flex items-center rounded-full bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-blue-700">
+        Teacher
+      </span>
+    );
+  }
+  return null;
 }

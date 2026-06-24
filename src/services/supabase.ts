@@ -16,4 +16,5 @@ export type Profile = {
   current_streak: number | null;
   last_message_date: string | null;
   created_at: string;
+  role: string;
 };

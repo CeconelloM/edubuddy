@@ -120,6 +120,20 @@ const BOOKS = [
       /^\s*[IVXLCDM]{1,4}\.\s*$/im,
     ],
   },
+  {
+    title: "Moby Dick",
+    author: "Herman Melville",
+    difficulty_level: "advanced",
+    description:
+      "Captain Ahab's obsessive quest to hunt the white sperm whale that maimed him — a sweeping adventure through the world of nineteenth-century whaling.",
+    url: "https://www.gutenberg.org/files/2701/2701-0.txt",
+    // Moby Dick uses "CHAPTER 1. Loomings.", "CHAPTER 2. The Carpet-Bag.", etc.
+    // The Gutenberg file has a table of contents (chapters 1-134 as stubs, chapter 135
+    // runs into actual text) + the real chapters. We dedup by embedded chapter number
+    // and keep the longest content version for each number.
+    chapterRegex: /^CHAPTER\s+\d+\.\s+\S/m,
+    dedupByChapterNumber: true,
+  },
 ];
 
 // ── Text processing helpers ───────────────────────────────────────────────────
@@ -265,6 +279,26 @@ async function seed() {
     }
     console.log(`   ✓  Parsed ${chapters.length} chapters  [regex: ${matchedRegex}]`);
 
+    // Dedup by embedded chapter number — for books whose Gutenberg file has both a
+    // table of contents and actual chapter headings (e.g. Moby Dick).
+    // Keeps the version with the most content for each chapter number.
+    if (book.dedupByChapterNumber) {
+      const byNumber = new Map();
+      for (const ch of chapters) {
+        const m = ch.title.match(/\b(\d+)\b/);
+        if (!m) continue;
+        const num = parseInt(m[1], 10);
+        const prev = byNumber.get(num);
+        if (!prev || ch.content.length > prev.content.length) {
+          byNumber.set(num, ch);
+        }
+      }
+      chapters = Array.from(byNumber.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([, ch], i) => ({ ...ch, chapter_number: i + 1 }));
+      console.log(`   ✓  Deduped to ${chapters.length} unique chapters (by chapter number)`);
+    }
+
     // 3. Check if book already exists; insert if not
     const { data: existing, error: lookupErr } = await supabase
       .from("books")
@@ -302,14 +336,13 @@ async function seed() {
       console.log(`   ✓  Book inserted (id: ${bookId})`);
     }
 
-    // 4. Insert chapters — skip any that already exist
-    console.log(`\n   ⏳  Inserting ${chapters.length} chapters…\n`);
+    // 4. Upsert chapters — insert new ones, update existing ones (title + content)
+    console.log(`\n   ⏳  Upserting ${chapters.length} chapters…\n`);
     let inserted = 0;
-    let skipped = 0;
+    let updated = 0;
     let failed = 0;
 
     for (const ch of chapters) {
-      // Check for existing chapter
       const { data: existingCh } = await supabase
         .from("book_chapters")
         .select("id")
@@ -317,33 +350,60 @@ async function seed() {
         .eq("chapter_number", ch.chapter_number)
         .maybeSingle();
 
+      const words = ch.content.split(/\s+/).length;
+
       if (existingCh) {
-        console.log(`   ⏩  Ch.${ch.chapter_number} already exists — skipping`);
-        skipped++;
-        continue;
-      }
-
-      const { error: chErr } = await supabase.from("book_chapters").insert({
-        book_id: bookId,
-        chapter_number: ch.chapter_number,
-        title: ch.title,
-        content: ch.content,
-      });
-
-      if (chErr) {
-        console.error(`   ❌  Ch.${ch.chapter_number} failed: ${chErr.message}`);
-        failed++;
+        const { error: updErr } = await supabase
+          .from("book_chapters")
+          .update({ title: ch.title, content: ch.content })
+          .eq("id", existingCh.id);
+        if (updErr) {
+          console.error(`   ❌  Ch.${ch.chapter_number} update failed: ${updErr.message}`);
+          failed++;
+        } else {
+          console.log(
+            `   🔄  Ch.${String(ch.chapter_number).padStart(2, "0")} updated — ${ch.title} (${words.toLocaleString()} words)`
+          );
+          updated++;
+        }
       } else {
-        const words = ch.content.split(/\s+/).length;
-        console.log(
-          `   ✅  Ch.${String(ch.chapter_number).padStart(2, "0")} — ${ch.title} (${words.toLocaleString()} words)`
-        );
-        inserted++;
+        const { error: chErr } = await supabase.from("book_chapters").insert({
+          book_id: bookId,
+          chapter_number: ch.chapter_number,
+          title: ch.title,
+          content: ch.content,
+        });
+        if (chErr) {
+          console.error(`   ❌  Ch.${ch.chapter_number} insert failed: ${chErr.message}`);
+          failed++;
+        } else {
+          console.log(
+            `   ✅  Ch.${String(ch.chapter_number).padStart(2, "0")} — ${ch.title} (${words.toLocaleString()} words)`
+          );
+          inserted++;
+        }
       }
     }
 
+    // Remove stale chapters whose numbers no longer exist in the parsed set
+    // (handles the case where a previous import created extra false-positive chapters)
+    const validNumbers = new Set(chapters.map((c) => c.chapter_number));
+    const { data: allExisting } = await supabase
+      .from("book_chapters")
+      .select("id, chapter_number")
+      .eq("book_id", bookId);
+
+    const stale = (allExisting ?? []).filter((r) => !validNumbers.has(r.chapter_number));
+    if (stale.length > 0) {
+      await supabase
+        .from("book_chapters")
+        .delete()
+        .in("id", stale.map((r) => r.id));
+      console.log(`\n   🗑️  Removed ${stale.length} stale chapter(s) from previous import`);
+    }
+
     console.log(
-      `\n   📊  Summary: ${inserted} inserted · ${skipped} skipped · ${failed} failed`
+      `\n   📊  Summary: ${inserted} inserted · ${updated} updated · ${stale.length} removed · ${failed} failed`
     );
   }
 

@@ -8,7 +8,9 @@ import { MyTutor } from "@/components/edubuddy/MyTutor";
 import { Community } from "@/components/edubuddy/Community";
 import { Library } from "@/components/edubuddy/Library";
 import { Profile } from "@/components/edubuddy/Profile";
+import { Admin } from "@/components/edubuddy/Admin";
 import { BottomNav, type Tab } from "@/components/edubuddy/BottomNav";
+import { Toaster } from "@/components/ui/sonner";
 
 type AuthStatus = "loading" | "unauthenticated" | "needs_nickname" | "needs_level" | "ready";
 
@@ -21,10 +23,11 @@ export type ProfileState = {
   currentStreak: number;
   lastMessageDate: string | null;
   createdAt: string;
+  role: string; // 'admin' | 'teacher' | 'user'
 };
 
 const PROFILE_SELECT =
-  "nickname, english_level, daily_goal, messages_sent_today, current_streak, last_message_date, created_at";
+  "nickname, english_level, daily_goal, messages_sent_today, current_streak, last_message_date, created_at, role";
 
 export default function App() {
   const [status, setStatus] = useState<AuthStatus>("loading");
@@ -68,6 +71,7 @@ export default function App() {
         currentStreak: data.current_streak ?? 0,
         lastMessageDate: data.last_message_date ?? null,
         createdAt: data.created_at,
+        role: data.role ?? "user",
       });
       setStatus(data.english_level ? "ready" : "needs_level");
     });
@@ -80,7 +84,7 @@ export default function App() {
     if (!user) return;
     const { data } = await supabase
       .from("profiles")
-      .select("daily_goal, messages_sent_today, current_streak, last_message_date, created_at")
+      .select("daily_goal, messages_sent_today, current_streak, last_message_date, created_at, role")
       .eq("id", user.id)
       .single();
 
@@ -93,6 +97,7 @@ export default function App() {
       currentStreak: data?.current_streak ?? 0,
       lastMessageDate: data?.last_message_date ?? null,
       createdAt: data?.created_at ?? new Date().toISOString(),
+      role: data?.role ?? "user",
     });
     setStatus("needs_level");
   }
@@ -163,6 +168,8 @@ export default function App() {
   }
 
   return (
+    <>
+    <Toaster position="top-center" richColors />
     <div className="mx-auto min-h-dvh w-full max-w-md bg-background shadow-xl ring-1 ring-border/50">
       {status === "unauthenticated" && <LoginScreen />}
 
@@ -188,6 +195,7 @@ export default function App() {
                 userId={profile.userId}
                 nickname={profile.nickname}
                 onMessageSent={handleMessageSent}
+                userRole={profile.role}
               />
             )}
             {tab === "library" && <Library />}
@@ -203,10 +211,12 @@ export default function App() {
                 createdAt={profile.createdAt}
               />
             )}
+            {tab === "admin" && <Admin role={profile.role} />}
           </div>
-          <BottomNav active={tab} onChange={setTab} />
+          <BottomNav active={tab} onChange={setTab} userRole={profile.role} />
         </div>
       )}
     </div>
+    </>
   );
 }

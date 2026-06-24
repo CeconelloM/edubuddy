@@ -8,7 +8,10 @@ import {
   CheckCircle2,
   Bookmark,
   RotateCcw,
+  X,
+  Sparkles,
 } from "lucide-react";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { supabase } from "@/services/supabase";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -18,7 +21,7 @@ type Book = {
   title: string;
   author: string;
   cover_url: string | null;
-  difficulty_level: "beginner" | "intermediate";
+  difficulty_level: "beginner" | "intermediate" | "advanced";
   description: string | null;
 };
 
@@ -29,70 +32,46 @@ type ChapterMeta = {
   title: string;
 };
 
-// ─── Mini translation dictionary ──────────────────────────────────────────────
-
-const DICT: Record<string, string> = {
-  the: "o / a", a: "um / uma", an: "um / uma", and: "e", or: "ou",
-  but: "mas", in: "em", on: "em cima de", at: "em / às", to: "para",
-  of: "de", for: "para / por", with: "com", by: "por", from: "de",
-  about: "sobre", is: "é", was: "era / foi", are: "são", were: "eram",
-  be: "ser / estar", have: "ter", has: "tem", had: "tinha / teve",
-  do: "fazer", does: "faz", did: "fez", will: "irá", would: "iria",
-  can: "pode / consegue", could: "poderia", should: "deveria",
-  may: "pode (possibilidade)", might: "poderia", not: "não",
-  this: "este / esta", that: "aquele / aquela", it: "ele / ela (coisa)",
-  he: "ele", she: "ela", they: "eles / elas", we: "nós", you: "você", i: "eu",
-  my: "meu / minha", your: "seu / sua", his: "dele", her: "dela",
-  their: "deles / delas", our: "nosso / nossa", said: "disse",
-  very: "muito", just: "apenas", up: "para cima", out: "fora",
-  go: "ir", come: "vir", get: "pegar / obter", know: "saber / conhecer",
-  see: "ver", look: "olhar", think: "pensar", like: "gostar / como",
-  make: "fazer", good: "bom", new: "novo", first: "primeiro",
-  last: "último", long: "longo", little: "pequeno / pouco", own: "próprio",
-  old: "velho", right: "certo / direito", big: "grande", high: "alto",
-  different: "diferente", small: "pequeno", large: "grande", next: "próximo",
-  early: "cedo", young: "jovem", important: "importante",
-  people: "pessoas", day: "dia", way: "caminho / jeito", time: "tempo / hora",
-  year: "ano", man: "homem", woman: "mulher", child: "criança",
-  world: "mundo", life: "vida", hand: "mão", part: "parte", place: "lugar",
-  week: "semana", where: "onde", when: "quando", how: "como",
-  what: "o que", which: "qual", who: "quem", why: "por que",
-  all: "todo / tudo", each: "cada", both: "ambos", between: "entre",
-  after: "depois", before: "antes", through: "através", never: "nunca",
-  always: "sempre", still: "ainda", again: "novamente", then: "então",
-  here: "aqui", there: "lá / ali", now: "agora", back: "de volta",
-  home: "lar / casa", house: "casa", door: "porta", street: "rua",
-  road: "estrada", name: "nome", night: "noite", morning: "manhã",
-  evening: "tarde / noite", water: "água", fire: "fogo", light: "luz",
-  dark: "escuro", white: "branco", black: "preto", red: "vermelho",
-  green: "verde", blue: "azul", gold: "ouro", silver: "prata",
-  run: "correr", walk: "caminhar", speak: "falar", read: "ler",
-  write: "escrever", help: "ajudar", find: "encontrar", lost: "perdido",
-  found: "encontrou / achou", take: "pegar", give: "dar", put: "colocar",
-  turn: "virar", leave: "sair / deixar", move: "mover / se mover",
-  keep: "manter", let: "deixar / permitir", stand: "ficar de pé",
-  feel: "sentir", seem: "parecer", tell: "contar / dizer",
-  ask: "perguntar", answer: "responder", call: "chamar / ligar",
-  try: "tentar", work: "trabalhar / funcionar", need: "precisar",
-  want: "querer", start: "começar", stop: "parar",
-  great: "ótimo / grande", few: "poucos",
-  many: "muitos", much: "muito", more: "mais", most: "a maioria",
-  only: "apenas / somente", also: "também", too: "também / demais",
-  even: "até / mesmo", however: "porém / no entanto", though: "embora",
-  although: "embora / apesar de", because: "porque",
-  while: "enquanto", until: "até que", unless: "a menos que",
-  if: "se", else: "senão / caso contrário", than: "do que",
-  so: "então / tão", such: "tal / tão", as: "como / enquanto",
-  already: "já", soon: "em breve", yet: "ainda / já",
-  ever: "alguma vez / sempre", once: "uma vez", twice: "duas vezes",
-  together: "juntos", alone: "sozinho", away: "longe / embora",
-  around: "ao redor / por aí", under: "embaixo de", over: "sobre / acima",
-  behind: "atrás", ahead: "à frente",
-  inside: "dentro", outside: "fora", along: "ao longo de",
-};
+// ─── Gemini Contextual Translation ───────────────────────────────────────────
 
 function cleanWord(raw: string) {
   return raw.replace(/[^a-zA-ZÀ-ÿ'-]/g, "").toLowerCase();
+}
+
+async function fetchGeminiTranslation(word: string, context: string) {
+  const apiKey = (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim();
+  if (!apiKey) throw new Error("VITE_GEMINI_API_KEY not defined");
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    // SDK serializes responseMimeType correctly — raw fetch was broken because
+    // the REST API expects snake_case (response_mime_type), not camelCase.
+    generationConfig: { responseMimeType: "application/json" },
+  });
+
+  const prompt = `You are an English teacher for Brazilian Portuguese-speaking students.
+
+The student clicked on the word: "${word}"
+Full paragraph context: "${context.slice(0, 500)}"
+
+Return ONLY a valid JSON object with exactly these four fields:
+{
+  "translation": "Portuguese translation of this word in this exact context (avoid wrong literal translations)",
+  "explanation": "Very short pedagogical note in Portuguese (max 12 words) explaining why it carries this meaning here",
+  "example": "Simple English sentence using the word naturally",
+  "example_pt": "Portuguese translation of that example sentence"
+}`;
+
+  const result = await model.generateContent(prompt);
+  const raw = result.response.text();
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  return JSON.parse(cleaned) as {
+    translation: string;
+    explanation: string;
+    example: string;
+    example_pt: string;
+  };
 }
 
 // ─── Book Cover ───────────────────────────────────────────────────────────────
@@ -173,8 +152,13 @@ type Tooltip = {
   word: string;
   x: number;
   y: number;
+  yBottom: number;
   translation: string | null;
+  explanation: string | null;
+  example: string | null;
+  example_pt: string | null;
   loading: boolean;
+  error?: boolean;
 };
 
 function ReadingView({
@@ -195,6 +179,7 @@ function ReadingView({
   const [isCompleted, setIsCompleted] = useState(false);
   const [savingBookmark, setSavingBookmark] = useState(false);
   const [savingComplete, setSavingComplete] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const paragraphRefs = useRef<(HTMLDivElement | null)[]>([]);
   const didScrollRef = useRef(false);
@@ -272,22 +257,44 @@ function ReadingView({
     setSavingComplete(false);
   }
 
-  async function handleWordClick(raw: string, e: React.MouseEvent<HTMLSpanElement>) {
+  async function handleWordClick(raw: string, paragraph: string, e: React.MouseEvent<HTMLSpanElement>) {
     e.stopPropagation();
     const word = cleanWord(raw);
     if (!word) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    setTooltip({ word, x: rect.left + rect.width / 2, y: rect.top, translation: null, loading: true });
-    await new Promise((r) => setTimeout(r, 550));
-    const translation = DICT[word] ?? null;
-    setTooltip((prev) => (prev?.word === word ? { ...prev, translation, loading: false } : prev));
+    const wordRect = e.currentTarget.getBoundingClientRect();
+    const cRect = containerRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
+    // Coordinates are relative to the position:relative container, not the viewport
+    const x = wordRect.left + wordRect.width / 2 - cRect.left;
+    const y = wordRect.top - cRect.top;
+    const yBottom = wordRect.bottom - cRect.top;
+    setTooltip({ word, x, y, yBottom, translation: null, explanation: null, example: null, example_pt: null, loading: true });
+    try {
+      const result = await fetchGeminiTranslation(word, paragraph);
+      setTooltip((prev) =>
+        prev?.word === word
+          ? { ...prev, translation: result.translation, explanation: result.explanation, example: result.example, example_pt: result.example_pt, loading: false }
+          : prev
+      );
+    } catch (err) {
+      console.error("Erro detalhado do Gemini:", err);
+      setTooltip((prev) =>
+        prev?.word === word
+          ? { ...prev, translation: "Erro ao traduzir", explanation: null, example: null, example_pt: null, loading: false, error: true }
+          : prev
+      );
+    }
   }
 
-  const tipX = tooltip ? Math.min(Math.max(tooltip.x, 92), window.innerWidth - 92) : 0;
+  const containerWidth = containerRef.current?.offsetWidth ?? 320;
+  const tipX = tooltip ? Math.min(Math.max(tooltip.x, 144), containerWidth - 144) : 0;
+  // Show popover below the word when it's too close to the top of the container
+  const showBelow = tooltip ? tooltip.y < 260 : false;
+  const tipTop = tooltip ? (showBelow ? tooltip.yBottom + 10 : tooltip.y - 12) : 0;
+  const tipTransform = showBelow ? "translate(-50%, 0)" : "translate(-50%, -100%)";
   const paragraphs = (content ?? "").split("\n\n");
 
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
+    <div ref={containerRef} className="relative flex min-h-dvh flex-col bg-background">
       {/* Header — stays in app theme */}
       <header className="flex items-center gap-3 border-b border-border bg-surface px-4 pt-10 pb-3">
         <button
@@ -369,7 +376,7 @@ function ReadingView({
                         return (
                           <span
                             key={wi}
-                            onClick={word ? (e) => handleWordClick(raw, e) : undefined}
+                            onClick={word ? (e) => handleWordClick(raw, paragraph, e) : undefined}
                             className={
                               word
                                 ? isWordActive
@@ -430,30 +437,73 @@ function ReadingView({
         )}
       </main>
 
-      {/* Translation Tooltip */}
+      {/* AI Translation Popover — absolute within position:relative container */}
       {tooltip && (
         <div
-          className="fixed z-50 w-48 rounded-2xl bg-surface px-4 py-3 shadow-2xl ring-1 ring-border"
-          style={{ left: tipX, top: tooltip.y - 12, transform: "translate(-50%, -100%)" }}
+          className="absolute z-50 w-72 overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/10"
+          style={{ left: tipX, top: tipTop, transform: tipTransform }}
+          onClick={(e) => e.stopPropagation()}
         >
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-            Translation
-          </p>
-          <p className="mt-0.5 text-[15px] font-bold text-foreground">{tooltip.word}</p>
-          {tooltip.loading ? (
-            <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" />
-              Translating...
+          {/* Header bar */}
+          <div className="flex items-center justify-between bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-2.5">
+            <div className="flex items-center gap-1.5 text-[12px] font-bold tracking-wide text-white">
+              <Sparkles className="size-3.5" />
+              Tradução EduBuddy
             </div>
+            <button
+              onClick={() => setTooltip(null)}
+              className="grid size-5 place-items-center rounded-full text-white/70 transition-colors hover:bg-white/20 hover:text-white"
+            >
+              <X className="size-3" />
+            </button>
+          </div>
+
+          <div className="px-4 py-3 space-y-3">
+            {/* Word + translation */}
+            <div>
+              <p className="text-lg font-bold text-gray-900 leading-tight">{tooltip.word}</p>
+              {tooltip.loading ? (
+                <div className="mt-1.5 flex items-center gap-2 text-xs text-gray-400">
+                  <Loader2 className="size-3.5 animate-spin text-purple-400" />
+                  <span>Consultando IA...</span>
+                </div>
+              ) : (
+                <p className={`mt-0.5 text-base font-semibold ${tooltip.error ? "text-red-400" : "text-brand-green"}`}>
+                  {tooltip.translation ?? "—"}
+                </p>
+              )}
+            </div>
+
+            {/* Explanation */}
+            {!tooltip.loading && tooltip.explanation && (
+              <div className="rounded-xl bg-violet-50 px-3 py-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-violet-400 mb-1">
+                  💡 Por que aqui?
+                </p>
+                <p className="text-xs leading-relaxed text-gray-700">{tooltip.explanation}</p>
+              </div>
+            )}
+
+            {/* Example */}
+            {!tooltip.loading && tooltip.example && (
+              <div className="rounded-xl bg-amber-50 px-3 py-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-500 mb-1">
+                  📝 Exemplo
+                </p>
+                <p className="text-xs italic text-gray-700">"{tooltip.example}"</p>
+                {tooltip.example_pt && (
+                  <p className="mt-0.5 text-xs text-gray-500">"{tooltip.example_pt}"</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Arrow — points down toward word when above, up toward word when below */}
+          {showBelow ? (
+            <div className="absolute -top-[5px] left-1/2 h-2.5 w-2.5 -translate-x-1/2 rotate-45 border-t border-l border-black/10 bg-white" />
           ) : (
-            <p className={`mt-1 text-sm font-medium ${tooltip.translation ? "text-brand-green" : "text-muted-foreground/60"}`}>
-              {tooltip.translation ?? "No translation found"}
-            </p>
+            <div className="absolute -bottom-[5px] left-1/2 h-2.5 w-2.5 -translate-x-1/2 rotate-45 border-b border-r border-black/10 bg-white" />
           )}
-          <button className="mt-2.5 text-[11px] font-medium text-muted-foreground/40 transition-colors hover:text-brand-green">
-            Ask EduBuddy →
-          </button>
-          <div className="absolute -bottom-[5px] left-1/2 h-2.5 w-2.5 -translate-x-1/2 rotate-45 border-b border-r border-border bg-surface" />
         </div>
       )}
     </div>
@@ -591,15 +641,17 @@ function ChapterListView({
 
 // ─── Library Main View ────────────────────────────────────────────────────────
 
+const DIFF_CONFIG: Record<string, { label: string; className: string }> = {
+  beginner:     { label: "Beginner",     className: "bg-green-100 text-green-700" },
+  intermediate: { label: "Intermediate", className: "bg-purple-100 text-purple-700" },
+  advanced:     { label: "Advanced",     className: "bg-red-100 text-red-700" },
+};
+
 function DifficultyBadge({ level }: { level: string }) {
-  const isIntermediate = level === "intermediate";
+  const cfg = DIFF_CONFIG[level] ?? DIFF_CONFIG.beginner;
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-        isIntermediate ? "bg-purple-100 text-purple-700" : "bg-green-100 text-green-700"
-      }`}
-    >
-      {isIntermediate ? "Intermediate" : "Beginner"}
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cfg.className}`}>
+      {cfg.label}
     </span>
   );
 }
@@ -628,12 +680,18 @@ function BookCard({ book, onSelect }: { book: Book; onSelect: (b: Book) => void 
   );
 }
 
+const SECTION_ACCENT: Record<string, string> = {
+  Beginner:     "bg-brand-green",
+  Intermediate: "bg-purple-500",
+  Advanced:     "bg-red-500",
+};
+
 function Section({ title, books, onSelect }: { title: string; books: Book[]; onSelect: (b: Book) => void }) {
-  const isIntermediate = title === "Intermediate";
+  const accent = SECTION_ACCENT[title] ?? "bg-brand-green";
   return (
     <div>
       <div className="mb-3 flex items-center gap-2 px-1">
-        <span className={`h-3.5 w-1 rounded-full ${isIntermediate ? "bg-purple-500" : "bg-brand-green"}`} />
+        <span className={`h-3.5 w-1 rounded-full ${accent}`} />
         <h2 className="text-xs font-bold uppercase tracking-widest text-foreground">{title}</h2>
         <span className="text-[11px] text-muted-foreground/60">
           {books.length} book{books.length !== 1 ? "s" : ""}
@@ -666,8 +724,9 @@ function LibraryView({ onSelectBook }: { onSelectBook: (b: Book) => void }) {
     fetchBooks();
   }, []);
 
-  const beginners = books.filter((b) => b.difficulty_level === "beginner");
+  const beginners     = books.filter((b) => b.difficulty_level === "beginner");
   const intermediates = books.filter((b) => b.difficulty_level === "intermediate");
+  const advanced      = books.filter((b) => b.difficulty_level === "advanced");
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">
@@ -703,6 +762,9 @@ function LibraryView({ onSelectBook }: { onSelectBook: (b: Book) => void }) {
             )}
             {intermediates.length > 0 && (
               <Section title="Intermediate" books={intermediates} onSelect={onSelectBook} />
+            )}
+            {advanced.length > 0 && (
+              <Section title="Advanced" books={advanced} onSelect={onSelectBook} />
             )}
           </div>
         )}
